@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.SurfaceTexture
 import android.os.Bundle
+import android.util.Log
 import android.view.TextureView
 import android.view.WindowManager
 import android.widget.Toast
@@ -25,6 +26,7 @@ import java.util.Collections
 class MainActivity : AppCompatActivity(), WebSocketConnectionListener {
 
     companion object {
+        private const val TAG = "MainActivity"
         private const val PERMISSIONS_REQUEST_CODE = 1001
     }
 
@@ -43,6 +45,7 @@ class MainActivity : AppCompatActivity(), WebSocketConnectionListener {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Log.i(TAG, "[LIFECYCLE] onCreate called")
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         binding = ActivityMainBinding.inflate(layoutInflater)
@@ -75,25 +78,23 @@ class MainActivity : AppCompatActivity(), WebSocketConnectionListener {
     private fun setupTextureView() {
         binding.viewFinder.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
             override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+                Log.i(TAG, "[TEXTURE] onSurfaceTextureAvailable: ${width}x${height}")
                 surfaceTextureAvailable = true
                 checkPermissionsAndInitCamera()
             }
 
-            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
+            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
+                Log.d(TAG, "[TEXTURE] onSurfaceTextureSizeChanged: ${width}x${height}")
+            }
 
             override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                Log.i(TAG, "[TEXTURE] onSurfaceTextureDestroyed")
                 surfaceTextureAvailable = false
                 cameraController.close()
                 return true
             }
 
             override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
-        }
-
-        // If texture is already available
-        if (binding.viewFinder.isAvailable) {
-            surfaceTextureAvailable = true
-            checkPermissionsAndInitCamera()
         }
     }
 
@@ -104,7 +105,11 @@ class MainActivity : AppCompatActivity(), WebSocketConnectionListener {
 
     private fun checkPermissionsAndInitCamera() {
         val cameraPerm = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-        if (cameraPerm != PackageManager.PERMISSION_GRANTED) {
+        val hasPerm = (cameraPerm == PackageManager.PERMISSION_GRANTED)
+        Log.i(TAG, "[PERMISSION] checkSelfPermission(CAMERA) = $cameraPerm (granted=$hasPerm)")
+
+        if (!hasPerm) {
+            logMessage("Requesting CAMERA runtime permission...")
             ActivityCompat.requestPermissions(
                 this,
                 arrayOf(Manifest.permission.CAMERA),
@@ -121,9 +126,11 @@ class MainActivity : AppCompatActivity(), WebSocketConnectionListener {
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        Log.i(TAG, "[PERMISSION] onRequestPermissionsResult: reqCode=$requestCode")
         if (requestCode == PERMISSIONS_REQUEST_CODE && grantResults.isNotEmpty() &&
             grantResults[0] == PackageManager.PERMISSION_GRANTED
         ) {
+            logMessage("CAMERA permission granted by user.")
             initCamera()
         } else {
             logMessage("Camera permission is required for multi-angle capture.")
@@ -137,7 +144,13 @@ class MainActivity : AppCompatActivity(), WebSocketConnectionListener {
             return
         }
 
-        logMessage("Initializing Camera2 sensor and live viewfinder...")
+        val cameraPerm = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+        if (cameraPerm != PackageManager.PERMISSION_GRANTED) {
+            logMessage("Cannot init camera: CAMERA permission not granted.")
+            return
+        }
+
+        logMessage("Opening Camera2 rear sensor and live viewfinder...")
         val texture = binding.viewFinder.surfaceTexture
 
         cameraController.openRearCamera(
@@ -157,7 +170,12 @@ class MainActivity : AppCompatActivity(), WebSocketConnectionListener {
                     isCameraReady = false
                     binding.tvCameraReady.text = "Camera: ERROR"
                     binding.tvCameraReady.setTextColor(0xFFFF5252.toInt())
+                    binding.tvPreviewOverlay.text = "CAMERA ERROR"
+                    binding.tvPreviewOverlay.setTextColor(0xFFFF5252.toInt())
                     logMessage("Camera error: $error")
+                    if (error.contains("ERROR_CAMERA_DISABLED")) {
+                        logMessage("Diag: Check Quick Settings 'Camera access' toggle & App Permissions.")
+                    }
                 }
             }
         )
@@ -244,7 +262,7 @@ class MainActivity : AppCompatActivity(), WebSocketConnectionListener {
                 val captureTs = System.currentTimeMillis()
                 metadata.put("capture_request_id", captureRequestId)
                 val luminance = metadata.optDouble("avg_luminance", 0.0)
-                logMessage("Captured valid photo (${width}x${height}, Lum: ${"%.1f".format(luminance)}). Uploading...")
+                logMessage("Captured photo (${width}x${height}, Lum: ${"%.1f".format(luminance)}). Uploading...")
                 wsClient.notifyCaptureCompleted(sessionId, captureTs)
 
                 imageUploader.uploadImage(
@@ -288,19 +306,23 @@ class MainActivity : AppCompatActivity(), WebSocketConnectionListener {
 
     override fun onResume() {
         super.onResume()
+        Log.i(TAG, "[LIFECYCLE] onResume called")
         if (binding.viewFinder.isAvailable && !isCameraReady) {
+            surfaceTextureAvailable = true
             checkPermissionsAndInitCamera()
         }
     }
 
     override fun onPause() {
         super.onPause()
+        Log.i(TAG, "[LIFECYCLE] onPause called")
         cameraController.close()
         isCameraReady = false
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        Log.i(TAG, "[LIFECYCLE] onDestroy called")
         wsClient.stop()
         cameraController.close()
     }
