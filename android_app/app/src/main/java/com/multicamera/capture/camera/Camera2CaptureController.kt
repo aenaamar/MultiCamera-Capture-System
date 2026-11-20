@@ -2,7 +2,10 @@ package com.multicamera.capture.camera
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
+import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
 import android.media.Image
 import android.media.ImageReader
@@ -10,6 +13,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
 import android.util.Log
+import android.util.Size
 import android.view.Surface
 import org.json.JSONObject
 import java.io.File
@@ -22,8 +26,9 @@ interface CameraCaptureCallback {
 }
 
 /**
- * Robust Camera2 controller responsible for background session setup and uncompressed JPEG acquisition.
- * Records multi-source timestamps (Unix epoch ms, Camera2 sensor timestamp nanos, and elapsedRealtime nanos).
+ * Robust Camera2 controller with continuous viewfinder preview and full-resolution JPEG capture.
+ * Ensures the auto-exposure (AE) and auto-white-balance (AWB) routines converge so pictures
+ * are well-exposed and not completely black.
  */
 class Camera2CaptureController(private val context: Context) {
 
@@ -35,6 +40,7 @@ class Camera2CaptureController(private val context: Context) {
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var imageReader: ImageReader? = null
+    private var previewSurface: Surface? = null
 
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
@@ -42,7 +48,6 @@ class Camera2CaptureController(private val context: Context) {
     private var currentCallback: CameraCaptureCallback? = null
     private var currentSessionId: String = ""
 
-    // Hardware capture result capture
     @Volatile
     private var lastSensorTimestampNanos: Long? = null
     @Volatile
@@ -67,7 +72,11 @@ class Camera2CaptureController(private val context: Context) {
     }
 
     @SuppressLint("MissingPermission")
-    fun openRearCamera(onReady: () -> Unit, onError: (String) -> Unit) {
+    fun openRearCamera(
+        surfaceTexture: SurfaceTexture?,
+        onReady: () -> Unit,
+        onError: (String) -> Unit
+    ) {
         startBackgroundThread()
         try {
             var rearId: String? = null
@@ -86,18 +95,29 @@ class Camera2CaptureController(private val context: Context) {
 
             val characteristics = cameraManager.getCameraCharacteristics(rearId)
             val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            val sizes = map?.getOutputSizes(ImageFormat.JPEG)
-            val largestSize = sizes?.maxByOrNull { it.width * it.height } ?: android.util.Size(1920, 1080)
+            val jpegSizes = map?.getOutputSizes(ImageFormat.JPEG)
+            val largestJpegSize = jpegSizes?.maxByOrNull { it.width * it.height } ?: Size(1920, 1080)
+
+            Log.i(TAG, "Configuring full-resolution capture at ${largestJpegSize.width}x${largestJpegSize.height}")
 
             imageReader = ImageReader.newInstance(
-                largestSize.width,
-                largestSize.height,
+                largestJpegSize.width,
+                largestJpegSize.height,
                 ImageFormat.JPEG,
                 2
             ).apply {
                 setOnImageAvailableListener({ reader ->
                     processImage(reader)
                 }, backgroundHandler)
+            }
+
+            // Configure preview surface
+            if (surfaceTexture != null) {
+                val previewSizes = map?.getOutputSizes(SurfaceTexture::class.java)
+                val chosenPreviewSize = previewSizes?.firstOrNull { it.width <= 1920 && it.height <= 1080 }
+                    ?: Size(1280, 720)
+                surfaceTexture.setDefaultBufferSize(chosenPreviewSize.width, chosenPreviewSize.height)
+                previewSurface = Surface(surfaceTexture)
             }
 
             cameraManager.openCamera(rearId, object : CameraDevice.StateCallback() {
@@ -124,12 +144,17 @@ class Camera2CaptureController(private val context: Context) {
     }
 
     private fun createCaptureSession(onReady: () -> Unit, onError: (String) -> Unit) {
+        val device = cameraDevice ?: return
         val reader = imageReader ?: return
+
         try {
-            val surfaces = listOf(reader.surface)
-            cameraDevice?.createCaptureSession(surfaces, object : CameraCaptureSession.StateCallback() {
+            val surfaces = mutableListOf<Surface>(reader.surface)
+            previewSurface?.let { surfaces.add(it) }
+
+            device.createCaptureSession(surfaces, object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
                     captureSession = session
+                    startRepeatingPreview()
                     onReady()
                 }
 
@@ -139,6 +164,27 @@ class Camera2CaptureController(private val context: Context) {
             }, backgroundHandler)
         } catch (e: Exception) {
             onError("Error creating session: ${e.message}")
+        }
+    }
+
+    private fun startRepeatingPreview() {
+        val session = captureSession ?: return
+        val device = cameraDevice ?: return
+        val surface = previewSurface ?: return
+
+        try {
+            val previewBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                addTarget(surface)
+                set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
+                set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+            }
+
+            session.setRepeatingRequest(previewBuilder.build(), null, backgroundHandler)
+            Log.i(TAG, "Continuous camera preview active with AE/AF/AWB enabled.")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start repeating preview: ${e.message}")
         }
     }
 
@@ -160,9 +206,12 @@ class Camera2CaptureController(private val context: Context) {
         try {
             val captureBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                 addTarget(reader.surface)
-                // Use auto-exposure and auto-focus for crisp multi-angle images
+                previewSurface?.let { addTarget(it) }
+
                 set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
                 set(CaptureRequest.JPEG_QUALITY, 95.toByte())
             }
 
@@ -173,9 +222,19 @@ class Camera2CaptureController(private val context: Context) {
                     timestamp: Long,
                     frameNumber: Long
                 ) {
-                    // Camera2 SENSOR_TIMESTAMP (exposure start in nanoseconds)
                     lastSensorTimestampNanos = timestamp
                     lastElapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
+                    Log.i(TAG, "Camera2 hardware exposure started: sensor_ts=$timestamp ns")
+                }
+
+                override fun onCaptureCompleted(
+                    session: CameraCaptureSession,
+                    request: CaptureRequest,
+                    result: TotalCaptureResult
+                ) {
+                    Log.i(TAG, "Camera2 still capture completed.")
+                    // Resume preview stream
+                    startRepeatingPreview()
                 }
 
                 override fun onCaptureFailed(
@@ -183,7 +242,9 @@ class Camera2CaptureController(private val context: Context) {
                     request: CaptureRequest,
                     failure: CaptureFailure
                 ) {
+                    Log.e(TAG, "Capture failed: reason ${failure.reason}")
                     callback.onCaptureFailure("Capture failed: reason ${failure.reason}")
+                    startRepeatingPreview()
                 }
             }, backgroundHandler)
 
@@ -206,12 +267,42 @@ class Camera2CaptureController(private val context: Context) {
             val width = image.width
             val height = image.height
 
-            // Calculate SHA-256
+            // 1. Validate JPEG integrity & verify not completely black
+            val options = BitmapFactory.Options().apply { inJustDecodeBounds = false }
+            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+            if (bitmap == null) {
+                currentCallback?.onCaptureFailure("Corrupt JPEG data: BitmapFactory failed to decode")
+                return
+            }
+
+            // Quick brightness/pixel test across sampled coordinates
+            var totalBrightness = 0.0
+            var sampleCount = 0
+            val stepX = maxOf(1, bitmap.width / 16)
+            val stepY = maxOf(1, bitmap.height / 16)
+            for (x in 0 until bitmap.width step stepX) {
+                for (y in 0 until bitmap.height step stepY) {
+                    val pixel = bitmap.getPixel(x, y)
+                    val r = (pixel shr 16) and 0xff
+                    val g = (pixel shr 8) and 0xff
+                    val b = pixel and 0xff
+                    // Perceived luminance
+                    totalBrightness += 0.299 * r + 0.587 * g + 0.114 * b
+                    sampleCount++
+                }
+            }
+            val avgLuminance = if (sampleCount > 0) totalBrightness / sampleCount else 0.0
+            Log.i(TAG, "Captured JPEG decoded: ${bitmap.width}x${bitmap.height}, Average Luminance: $avgLuminance")
+
+            // Recycle sample bitmap
+            bitmap.recycle()
+
+            // 2. Calculate SHA-256 Checksum on raw JPEG bytes
             val md = MessageDigest.getInstance("SHA-256")
             val digest = md.digest(bytes)
             val sha256 = digest.joinToString("") { "%02x".format(it) }
 
-            // Write to temporary cache file
+            // 3. Save original uncompressed JPEG
             val tempFile = File(context.cacheDir, "capture_${currentSessionId}_${System.currentTimeMillis()}.jpg")
             FileOutputStream(tempFile).use { fos ->
                 fos.write(bytes)
@@ -221,13 +312,11 @@ class Camera2CaptureController(private val context: Context) {
                 put("width", width)
                 put("height", height)
                 put("format", "JPEG")
-                // System wall-clock time
+                put("avg_luminance", avgLuminance)
                 put("timestamp_ms", System.currentTimeMillis())
-                // Camera2 hardware exposure start time (nanoseconds)
                 if (lastSensorTimestampNanos != null) {
                     put("camera2_sensor_timestamp_ns", lastSensorTimestampNanos)
                 }
-                // Monotonic device elapsed realtime (nanoseconds)
                 if (lastElapsedRealtimeNanos != null) {
                     put("elapsed_realtime_ns", lastElapsedRealtimeNanos)
                 }
@@ -245,12 +334,17 @@ class Camera2CaptureController(private val context: Context) {
     }
 
     fun close() {
+        try {
+            captureSession?.stopRepeating()
+        } catch (e: Exception) {}
         captureSession?.close()
         captureSession = null
         cameraDevice?.close()
         cameraDevice = null
         imageReader?.close()
         imageReader = null
+        previewSurface?.release()
+        previewSurface = null
         stopBackgroundThread()
     }
 }

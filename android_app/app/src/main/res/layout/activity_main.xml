@@ -4,7 +4,7 @@
     android:layout_height="match_parent"
     android:background="#121212"
     android:orientation="vertical"
-    android:padding="20dp">
+    android:padding="16dp">
 
     <!-- Header -->
     <TextView
@@ -12,93 +12,143 @@
         android:layout_height="wrap_content"
         android:text="MultiCamera Node"
         android:textColor="#2196F3"
-        android:textSize="22sp"
+        android:textSize="20sp"
         android:textStyle="bold" />
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
+        android:layout_marginTop="2dp"
         android:text="3D Gaussian Splatting Remote Capture"
         android:textColor="#757575"
-        android:textSize="12sp" />
+        android:textSize="11sp" />
 
     <View
         android:layout_width="match_parent"
         android:layout_height="1dp"
-        android:layout_marginTop="16dp"
-        android:layout_marginBottom="16dp"
+        android:layout_marginTop="10dp"
+        android:layout_marginBottom="10dp"
         android:background="#2C2C2C" />
 
-    <!-- Configuration Fields -->
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Camera Identifier"
-        android:textColor="#B0BEC5"
-        android:textSize="13sp" />
-
-    <EditText
-        android:id="@+id/etCameraId"
+    <!-- Live Camera Viewfinder Preview Area -->
+    <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="48dp"
-        android:layout_marginTop="4dp"
-        android:background="#1E1E1E"
-        android:hint="camera_01"
-        android:padding="10dp"
-        android:textColor="#FFFFFF"
-        android:textColorHint="#546E7A"
-        android:textSize="15sp" />
+        android:layout_height="220dp"
+        android:background="#000000">
 
+        <TextureView
+            android:id="@+id/viewFinder"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <TextView
+            android:id="@+id/tvPreviewOverlay"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|start"
+            android:layout_margin="8dp"
+            android:background="#80000000"
+            android:padding="4dp"
+            android:text="LIVE PREVIEW"
+            android:textColor="#00E676"
+            android:textSize="10sp"
+            android:textStyle="bold" />
+    </FrameLayout>
+
+    <!-- Configuration Fields Row 1: Camera ID & Port -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:orientation="horizontal">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Camera ID"
+                android:textColor="#B0BEC5"
+                android:textSize="12sp" />
+
+            <EditText
+                android:id="@+id/etCameraId"
+                android:layout_width="match_parent"
+                android:layout_height="42dp"
+                android:layout_marginTop="2dp"
+                android:background="#1E1E1E"
+                android:hint="camera_01"
+                android:padding="8dp"
+                android:textColor="#FFFFFF"
+                android:textColorHint="#546E7A"
+                android:textSize="14sp" />
+        </LinearLayout>
+
+        <View
+            android:layout_width="10dp"
+            android:layout_height="match_parent" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Server Port"
+                android:textColor="#B0BEC5"
+                android:textSize="12sp" />
+
+            <EditText
+                android:id="@+id/etServerPort"
+                android:layout_width="match_parent"
+                android:layout_height="42dp"
+                android:layout_marginTop="2dp"
+                android:background="#1E1E1E"
+                android:hint="8000"
+                android:inputType="number"
+                android:padding="8dp"
+                android:text="8000"
+                android:textColor="#FFFFFF"
+                android:textColorHint="#546E7A"
+                android:textSize="14sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Configuration Fields Row 2: Server IP -->
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
+        android:layout_marginTop="8dp"
         android:text="Laptop Server IP Address"
         android:textColor="#B0BEC5"
-        android:textSize="13sp" />
+        android:textSize="12sp" />
 
     <EditText
         android:id="@+id/etServerHost"
         android:layout_width="match_parent"
-        android:layout_height="48dp"
-        android:layout_marginTop="4dp"
+        android:layout_height="42dp"
+        android:layout_marginTop="2dp"
         android:background="#1E1E1E"
         android:hint="192.168.1.6"
         android:inputType="textUri"
-        android:padding="10dp"
+        android:padding="8dp"
         android:textColor="#FFFFFF"
         android:textColorHint="#546E7A"
-        android:textSize="15sp" />
+        android:textSize="14sp" />
 
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
-        android:text="Server Port"
-        android:textColor="#B0BEC5"
-        android:textSize="13sp" />
-
-    <EditText
-        android:id="@+id/etServerPort"
-        android:layout_width="match_parent"
-        android:layout_height="48dp"
-        android:layout_marginTop="4dp"
-        android:background="#1E1E1E"
-        android:hint="8000"
-        android:inputType="number"
-        android:padding="10dp"
-        android:text="8000"
-        android:textColor="#FFFFFF"
-        android:textColorHint="#546E7A"
-        android:textSize="15sp" />
-
-    <!-- Action Buttons -->
+    <!-- Action Button -->
     <Button
         android:id="@+id/btnConnect"
         android:layout_width="match_parent"
-        android:layout_height="52dp"
-        android:layout_marginTop="20dp"
+        android:layout_height="46dp"
+        android:layout_marginTop="10dp"
         android:backgroundTint="#2196F3"
         android:text="@string/connect"
         android:textColor="#FFFFFF"
@@ -108,10 +158,10 @@
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="20dp"
+        android:layout_marginTop="10dp"
         android:background="#1E1E1E"
         android:orientation="vertical"
-        android:padding="16dp">
+        android:padding="10dp">
 
         <TextView
             android:id="@+id/tvStatus"
@@ -119,41 +169,48 @@
             android:layout_height="wrap_content"
             android:text="@string/status_disconnected"
             android:textColor="#FF5252"
-            android:textSize="15sp"
+            android:textSize="13sp"
             android:textStyle="bold" />
 
-        <TextView
-            android:id="@+id/tvBattery"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="Battery: --%"
-            android:textColor="#B0BEC5"
-            android:textSize="13sp" />
-
-        <TextView
-            android:id="@+id/tvCameraReady"
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:text="Camera Sensor: Initializing..."
-            android:textColor="#B0BEC5"
-            android:textSize="13sp" />
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/tvBattery"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Battery: --%"
+                android:textColor="#B0BEC5"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/tvCameraReady"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Camera: Initializing..."
+                android:textColor="#B0BEC5"
+                android:textSize="12sp" />
+        </LinearLayout>
     </LinearLayout>
 
     <!-- Activity Log View -->
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
+        android:layout_marginTop="10dp"
         android:text="Log Activity"
         android:textColor="#757575"
-        android:textSize="12sp" />
+        android:textSize="11sp" />
 
     <ScrollView
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_marginTop="6dp"
+        android:layout_marginTop="4dp"
         android:layout_weight="1"
         android:background="#181818">
 
@@ -162,7 +219,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:fontFamily="monospace"
-            android:padding="10dp"
+            android:padding="8dp"
             android:textColor="#A5D6A7"
             android:textSize="11sp" />
     </ScrollView>

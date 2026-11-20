@@ -14,6 +14,7 @@ from laptop_app.services.capture_manager import capture_manager
 from laptop_app.models.schemas import CameraState, CaptureStatus
 from laptop_app.ui.camera_cards import CameraCard
 from laptop_app.ui.capture_panel import CapturePanel
+from laptop_app.utils.async_loop import run_async_coro
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -105,13 +106,37 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No Cameras Ready", "Cannot capture: No Android cameras are currently connected and ready.")
             return
         self.capture_panel.log_message(f"Initiating capture across {len(ready)} cameras...")
-        asyncio.create_task(capture_manager.trigger_capture_all())
+        try:
+            future = run_async_coro(capture_manager.trigger_capture_all())
+            def _on_done(fut):
+                try:
+                    res = fut.result()
+                    if res.get("status") == "error":
+                        QTimer.singleShot(0, lambda: self.capture_panel.log_message(f"Capture error: {res.get('message')}"))
+                    else:
+                        QTimer.singleShot(0, lambda: self.capture_panel.log_message(f"Capture triggered successfully for session {res.get('session_id')}."))
+                except Exception as ex:
+                    QTimer.singleShot(0, lambda: self.capture_panel.log_message(f"Failed to trigger capture: {ex}"))
+            future.add_done_callback(_on_done)
+        except Exception as e:
+            self.capture_panel.log_message(f"Error starting capture task: {e}")
 
     def _on_new_session_clicked(self):
         ready = device_manager.get_ready_devices()
         cams = [d.camera_id for d in ready]
-        asyncio.create_task(session_manager.create_session(cams))
-        self.capture_panel.log_message(f"Created new session with {len(cams)} cameras.")
+        try:
+            future = run_async_coro(session_manager.create_session(cams))
+            def _on_done(fut):
+                try:
+                    sess = fut.result()
+                    QTimer.singleShot(0, lambda: self.capture_panel.log_message(
+                        f"Created new session: {sess.session_id} with {len(cams)} camera(s)."
+                    ))
+                except Exception as ex:
+                    QTimer.singleShot(0, lambda: self.capture_panel.log_message(f"Failed to create session: {ex}"))
+            future.add_done_callback(_on_done)
+        except Exception as e:
+            self.capture_panel.log_message(f"Error scheduling session creation: {e}")
 
     def _on_open_folder_clicked(self):
         folder = settings.dataset_dir

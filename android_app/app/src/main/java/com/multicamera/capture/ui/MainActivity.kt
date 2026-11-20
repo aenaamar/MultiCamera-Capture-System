@@ -2,7 +2,9 @@ package com.multicamera.capture.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.SurfaceTexture
 import android.os.Bundle
+import android.view.TextureView
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -34,6 +36,7 @@ class MainActivity : AppCompatActivity(), WebSocketConnectionListener {
 
     private var isConnected = false
     private var isCameraReady = false
+    private var surfaceTextureAvailable = false
 
     // Deduplication tracking: prevent duplicate captures for same captureRequestId
     private val handledCaptureRequests = Collections.synchronizedSet(HashSet<String>())
@@ -51,13 +54,13 @@ class MainActivity : AppCompatActivity(), WebSocketConnectionListener {
         imageUploader = ImageUploader()
 
         setupUI()
-        checkPermissionsAndInitCamera()
+        setupTextureView()
     }
 
     private fun setupUI() {
         val defaultId = "camera_01"
         binding.etCameraId.setText(defaultId)
-        binding.etServerHost.setText("192.168.1.6")
+        binding.etServerHost.setText("192.168.43.204")
 
         binding.btnConnect.setOnClickListener {
             if (!isConnected) {
@@ -67,6 +70,31 @@ class MainActivity : AppCompatActivity(), WebSocketConnectionListener {
             }
         }
         updateBatteryDisplay()
+    }
+
+    private fun setupTextureView() {
+        binding.viewFinder.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+            override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+                surfaceTextureAvailable = true
+                checkPermissionsAndInitCamera()
+            }
+
+            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
+
+            override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                surfaceTextureAvailable = false
+                cameraController.close()
+                return true
+            }
+
+            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
+        }
+
+        // If texture is already available
+        if (binding.viewFinder.isAvailable) {
+            surfaceTextureAvailable = true
+            checkPermissionsAndInitCamera()
+        }
     }
 
     private fun updateBatteryDisplay() {
@@ -104,20 +132,30 @@ class MainActivity : AppCompatActivity(), WebSocketConnectionListener {
     }
 
     private fun initCamera() {
-        logMessage("Initializing Camera2 rear sensor...")
+        if (!surfaceTextureAvailable) {
+            logMessage("Waiting for Viewfinder SurfaceTexture...")
+            return
+        }
+
+        logMessage("Initializing Camera2 sensor and live viewfinder...")
+        val texture = binding.viewFinder.surfaceTexture
+
         cameraController.openRearCamera(
+            surfaceTexture = texture,
             onReady = {
                 runOnUiThread {
                     isCameraReady = true
-                    binding.tvCameraReady.text = "Camera Sensor: READY (Rear Lens)"
+                    binding.tvCameraReady.text = "Camera: READY"
                     binding.tvCameraReady.setTextColor(0xFF4CAF50.toInt())
-                    logMessage("Camera2 rear sensor initialized and ready.")
+                    binding.tvPreviewOverlay.text = "LIVE PREVIEW - READY"
+                    binding.tvPreviewOverlay.setTextColor(0xFF00E676.toInt())
+                    logMessage("Camera2 initialized. Live preview active.")
                 }
             },
             onError = { error ->
                 runOnUiThread {
                     isCameraReady = false
-                    binding.tvCameraReady.text = "Camera Sensor: ERROR ($error)"
+                    binding.tvCameraReady.text = "Camera: ERROR"
                     binding.tvCameraReady.setTextColor(0xFFFF5252.toInt())
                     logMessage("Camera error: $error")
                 }
@@ -176,12 +214,17 @@ class MainActivity : AppCompatActivity(), WebSocketConnectionListener {
     }
 
     override fun onCaptureRequest(sessionId: String, captureRequestId: String, timestampMs: Long) {
-        // Prevent duplicate captures if the same request ID arrives more than once
         if (handledCaptureRequests.contains(captureRequestId)) {
             logMessage("Duplicate capture request ignored: $captureRequestId")
             return
         }
         handledCaptureRequests.add(captureRequestId)
+
+        if (!isCameraReady) {
+            logMessage("Cannot capture: Camera2 not ready yet.")
+            wsClient.notifyCaptureFailed(sessionId, "Camera sensor not ready")
+            return
+        }
 
         logMessage("--> Capture request executing: $sessionId ($captureRequestId)")
         wsClient.notifyCaptureStarted(sessionId)
@@ -200,10 +243,10 @@ class MainActivity : AppCompatActivity(), WebSocketConnectionListener {
             ) {
                 val captureTs = System.currentTimeMillis()
                 metadata.put("capture_request_id", captureRequestId)
-                logMessage("Captured ($width x $height). Starting reliable upload (SHA256: ${sha256.take(8)}...)...")
+                val luminance = metadata.optDouble("avg_luminance", 0.0)
+                logMessage("Captured valid photo (${width}x${height}, Lum: ${"%.1f".format(luminance)}). Uploading...")
                 wsClient.notifyCaptureCompleted(sessionId, captureTs)
 
-                // Automatic Image Upload with exponential backoff retry
                 imageUploader.uploadImage(
                     host = host,
                     port = port,
@@ -215,7 +258,7 @@ class MainActivity : AppCompatActivity(), WebSocketConnectionListener {
                     metadata = metadata,
                     callback = object : ImageUploadCallback {
                         override fun onUploadSuccess(response: JSONObject) {
-                            logMessage("Upload completed & verified by laptop!")
+                            logMessage("Upload completed & verified by laptop (SHA-256 matched)!")
                             capturedFile.delete()
                         }
 
@@ -241,6 +284,19 @@ class MainActivity : AppCompatActivity(), WebSocketConnectionListener {
         runOnUiThread {
             binding.tvLog.append("\n$msg")
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (binding.viewFinder.isAvailable && !isCameraReady) {
+            checkPermissionsAndInitCamera()
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        cameraController.close()
+        isCameraReady = false
     }
 
     override fun onDestroy() {

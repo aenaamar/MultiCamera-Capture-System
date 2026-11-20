@@ -1,6 +1,5 @@
 """Entrypoint for the Laptop Application and FastAPI Server."""
 import sys
-import asyncio
 import threading
 import uvicorn
 from PySide6.QtWidgets import QApplication
@@ -21,20 +20,6 @@ def main():
     qt_app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
-
-    # 3. Enable async event loop processing for Qt
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    def process_asyncio():
-        loop.stop()
-        loop.run_forever()
-
-    timer = qt_app.create_timer if hasattr(qt_app, "create_timer") else None
-    from PySide6.QtCore import QTimer
-    qtimer = QTimer()
-    qtimer.timeout.connect(process_asyncio)
-    qtimer.start(20)
 
     sys.exit(qt_app.exec())
 

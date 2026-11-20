@@ -10,8 +10,15 @@ from laptop_app.services.session_manager import session_manager
 from laptop_app.services.capture_manager import capture_manager
 from laptop_app.server.websocket_manager import ws_manager
 from laptop_app.server.upload_manager import upload_manager
+from laptop_app.utils.async_loop import set_server_loop
+import asyncio
 
 app = FastAPI(title=settings.app_name, version=settings.version)
+
+@app.on_event("startup")
+async def on_startup():
+    loop = asyncio.get_running_loop()
+    set_server_loop(loop)
 
 app.add_middleware(
     CORSMiddleware,
