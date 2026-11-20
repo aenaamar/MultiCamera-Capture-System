@@ -1,0 +1,86 @@
+name: Android Debug APK Build
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-android-apk:
+    name: Build MultiCamera Debug APK
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ───────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Java 17 — required by Android Gradle Plugin 8.2.2 ─────────────
+      - name: Set up JDK 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # ── 3. Android SDK ────────────────────────────────────────────────────
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept SDK licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Install required SDK packages
+        run: |
+          sdkmanager \
+            "platforms;android-34" \
+            "build-tools;34.0.0" \
+            "platform-tools"
+
+      # ── 4. Gradle cache ───────────────────────────────────────────────────
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('android_app/**/*.gradle*', 'android_app/**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      # ── 5. Build ──────────────────────────────────────────────────────────
+      - name: Make Gradle wrapper executable
+        run: chmod +x android_app/gradlew
+
+      - name: Build Debug APK
+        working-directory: android_app
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
+
+      # ── 6. Verify ─────────────────────────────────────────────────────────
+      - name: Verify APK exists and is non-empty
+        run: |
+          APK="android_app/app/build/outputs/apk/debug/app-debug.apk"
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK not found at $APK"
+            exit 1
+          fi
+          SIZE=$(stat -c%s "$APK")
+          echo "APK path : $APK"
+          echo "APK size : $SIZE bytes"
+          if [ "$SIZE" -eq 0 ]; then
+            echo "ERROR: APK is 0 bytes"
+            exit 1
+          fi
+          echo "Verification passed."
+
+      # ── 7. Upload artifact ────────────────────────────────────────────────
+      - name: Upload APK as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MultiCamera-Capture-Debug-APK
+          path: android_app/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30

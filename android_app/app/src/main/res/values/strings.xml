@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">MultiCamera Capture</string>
+    <string name="camera_id_hint">Camera ID (e.g. camera_01)</string>
+    <string name="server_host_hint">Server IP (e.g. 192.168.1.6)</string>
+    <string name="server_port_hint">Port (e.g. 8000)</string>
+    <string name="connect">Connect to Laptop</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="status_disconnected">Status: Disconnected</string>
+    <string name="status_connected">Status: Connected to Laptop</string>
+    <string name="status_ready">Status: Ready for Capture</string>
+</resources>
