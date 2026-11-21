@@ -1,9 +1,12 @@
 """Device Manager service for tracking connected smartphones."""
 import asyncio
+import logging
 from datetime import datetime
 from typing import Dict, Optional, Callable, List
 from laptop_app.models.schemas import CameraDevice, CameraState
 from laptop_app.config.settings import settings
+
+logger = logging.getLogger("DeviceManager")
 
 class DeviceManager:
     def __init__(self):
@@ -30,7 +33,19 @@ class DeviceManager:
         sensor_info: dict,
         ws: any
     ) -> CameraDevice:
+        old_ws = None
         async with self._lock:
+            existing = self._devices.get(camera_id)
+            if existing is not None:
+                # A different connection is re-registering with the same camera_id.
+                # Close the old WebSocket so it doesn't linger as an orphan.
+                if existing.client_ws is not None and existing.client_ws is not ws:
+                    old_ws = existing.client_ws
+                    logger.warning(
+                        f"[DeviceManager] camera_id='{camera_id}' re-registered from "
+                        f"{ip_address}. Closing previous WebSocket connection."
+                    )
+
             device = CameraDevice(
                 camera_id=camera_id,
                 device_name=device_name,
@@ -42,6 +57,14 @@ class DeviceManager:
                 client_ws=ws
             )
             self._devices[camera_id] = device
+
+        # Close the old WebSocket outside the lock to avoid holding it during I/O
+        if old_ws is not None:
+            try:
+                await old_ws.close()
+            except Exception as e:
+                logger.debug(f"[DeviceManager] Error closing old WebSocket for {camera_id}: {e}")
+
         self._notify()
         return device
 

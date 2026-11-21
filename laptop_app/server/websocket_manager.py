@@ -8,6 +8,8 @@ from laptop_app.models.schemas import CameraState
 
 logger = logging.getLogger("WebSocketManager")
 
+logger = logging.getLogger("WebSocketManager")
+
 class WebSocketManager:
     async def handle_connection(self, websocket: WebSocket):
         await websocket.accept()
@@ -35,6 +37,16 @@ class WebSocketManager:
                     if not registered_camera_id:
                         await websocket.send_json({"type": "error", "message": "Missing camera_id"})
                         continue
+
+                    # Warn if another active device is already registered under this camera_id.
+                    # DeviceManager.register_device() will close the old WebSocket automatically.
+                    existing = device_manager.get_device(registered_camera_id)
+                    if existing is not None and existing.client_ws is not None and existing.client_ws is not websocket:
+                        logger.warning(
+                            f"[WS] camera_id='{registered_camera_id}' already registered "
+                            f"from {existing.ip_address}. New connection from {client_host} "
+                            f"will replace it."
+                        )
 
                     await device_manager.register_device(
                         camera_id=registered_camera_id,

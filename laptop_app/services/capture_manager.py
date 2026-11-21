@@ -14,8 +14,8 @@ class CaptureManager:
         """
         Coordinates multi-camera capture:
         1. Identifies ready cameras.
-        2. Generates new unique session ID.
-        3. Sends capture_request to each phone over WebSockets.
+        2. Reuses existing IDLE current_session (e.g. from 'New Session') or creates one.
+        3. Sends capture_request to each phone over WebSockets with the correct session_id.
         """
         if self._is_capturing:
             return {"status": "error", "message": "A capture session is currently in progress."}
@@ -27,8 +27,20 @@ class CaptureManager:
         self._is_capturing = True
         expected_camera_ids = [d.camera_id for d in ready_devices]
         
-        # Create session
-        session = await session_manager.create_session(expected_camera_ids)
+        # Check if an IDLE session already exists (e.g., user clicked "New Session" first)
+        curr = session_manager.current_session
+        if curr and curr.status == CaptureStatus.IDLE:
+            session = curr
+            # Ensure all currently ready cameras are included in expected_cameras
+            for cid in expected_camera_ids:
+                if cid not in session.expected_cameras:
+                    session.expected_cameras.append(cid)
+                if cid not in session.results:
+                    from laptop_app.models.schemas import CameraCaptureResult
+                    session.results[cid] = CameraCaptureResult(camera_id=cid)
+        else:
+            session = await session_manager.create_session(expected_camera_ids)
+
         session.status = CaptureStatus.IN_PROGRESS
         
         # Broadcast capture command to each ready device
@@ -44,7 +56,6 @@ class CaptureManager:
                 "camera_id": dev.camera_id,
                 "timestamp_ms": timestamp_ms
             }
-            # Set state to capturing
             dev.state = CameraState.CAPTURING
             capture_tasks.append(self._send_command(dev.client_ws, msg, dev.camera_id, session.session_id))
 

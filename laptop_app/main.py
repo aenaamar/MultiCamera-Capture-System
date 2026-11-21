@@ -9,7 +9,15 @@ from laptop_app.ui.main_window import MainWindow
 
 def run_server():
     """Runs the FastAPI server in a dedicated daemon thread."""
-    uvicorn.run(app, host="0.0.0.0", port=settings.port, log_level="info")
+    # ws_ping_interval=None disables uvicorn sending protocol ping frames,
+    # preventing false 'Pong not received' drops when client relies on app-level heartbeats
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=settings.port,
+        log_level="info",
+        ws_ping_interval=None
+    )
 
 def main():
     # 1. Start server thread
