@@ -61,8 +61,10 @@ class MainActivity : AppCompatActivity(), WebSocketConnectionListener {
     }
 
     private fun setupUI() {
-        val defaultId = "camera_01"
-        binding.etCameraId.setText(defaultId)
+        // Auto-populate camera_id from last saved slot (defaults to "camera_01" on first run).
+        // The user can change this in the text field; the new value is persisted on Connect.
+        val savedSlot = deviceInspector.getSavedCameraSlot()
+        binding.etCameraId.setText(savedSlot)
         binding.etServerHost.setText("192.168.43.204")
 
         binding.btnConnect.setOnClickListener {
@@ -191,14 +193,18 @@ class MainActivity : AppCompatActivity(), WebSocketConnectionListener {
             return
         }
 
+        // Persist the user's chosen camera slot so it auto-populates next time
+        deviceInspector.saveCameraSlot(camId)
+
         val port = portStr.toIntOrNull() ?: 8000
-        logMessage("Connecting to ws://$host:$port/ws as $camId...")
+        logMessage("Connecting to ws://$host:$port/ws as $camId (device: ${deviceInspector.deviceId.takeLast(8)})...")
 
         wsClient.start(host, port, camId) {
-            val model = deviceInspector.deviceModel
-            val batt = deviceInspector.batteryLevel
-            val chars = deviceInspector.getCameraCharacteristicsJson()
-            Pair(model, Pair(batt, chars))
+            // Build the full device info bundle for the registration payload
+            val deviceInfo = deviceInspector.getDeviceInfoJson()
+            val sensorInfo = deviceInspector.getCameraCharacteristicsJson()
+            deviceInfo.put("sensor_info", sensorInfo)
+            deviceInfo
         }
     }
 
@@ -225,10 +231,11 @@ class MainActivity : AppCompatActivity(), WebSocketConnectionListener {
         logMessage("Disconnected: $reason")
     }
 
-    override fun onRegistrationAccepted(cameraId: String) {
+    override fun onRegistrationAccepted(cameraId: String, deviceId: String?) {
+        val shortId = deviceId?.takeLast(8) ?: "--"
         binding.tvStatus.text = "Status: Registered ($cameraId) - READY"
         binding.tvStatus.setTextColor(0xFF4CAF50.toInt())
-        logMessage("Registration confirmed for $cameraId by laptop.")
+        logMessage("Registration confirmed for $cameraId (device: …$shortId) by laptop.")
     }
 
     override fun onCaptureRequest(sessionId: String, captureRequestId: String, timestampMs: Long) {

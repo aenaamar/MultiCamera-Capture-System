@@ -11,11 +11,24 @@ import java.util.concurrent.atomic.AtomicBoolean
 interface WebSocketConnectionListener {
     fun onConnected()
     fun onDisconnected(reason: String)
-    fun onRegistrationAccepted(cameraId: String)
+    fun onRegistrationAccepted(cameraId: String, deviceId: String?)
     fun onCaptureRequest(sessionId: String, captureRequestId: String, timestampMs: Long)
     fun onError(error: String)
 }
 
+/**
+ * Manages the WebSocket connection to the laptop server.
+ *
+ * Registration payload now includes:
+ *   - device_id   : persistent UUID4 generated on the phone (never changes per device)
+ *   - manufacturer: phone brand (e.g. "Samsung")
+ *   - model       : phone model (e.g. "Galaxy S22")
+ *   - os_version  : human-readable Android version
+ *   - mac_address : Wi-Fi MAC if readable (may be absent due to randomisation)
+ *   - camera_id   : user-chosen slot name (e.g. "camera_01")
+ *   - device_name : brand + model string
+ *   - battery_level, sensor_info
+ */
 class LaptopWebSocketClient(
     private val listener: WebSocketConnectionListener
 ) {
@@ -32,7 +45,7 @@ class LaptopWebSocketClient(
     private var currentHost: String = ""
     private var currentPort: Int = 8000
     private var currentCameraId: String = ""
-    private var deviceInspectorProvider: (() -> Pair<String, Pair<Int, JSONObject>>)? = null
+    private var deviceInfoProvider: (() -> JSONObject)? = null
 
     private val heartbeatRunnable = object : Runnable {
         override fun run() {
@@ -50,16 +63,24 @@ class LaptopWebSocketClient(
         }
     }
 
+    /**
+     * @param host               Laptop IP address
+     * @param port               Server port (default 8000)
+     * @param cameraId           User-configured slot name (e.g. "camera_01")
+     * @param deviceInfoProvider Lambda that returns the full device info JSONObject
+     *                           (device_id, manufacturer, model, os_version, mac_address,
+     *                            battery_level, sensor_info, device_name).
+     */
     fun start(
         host: String,
         port: Int,
         cameraId: String,
-        inspectorProvider: () -> Pair<String, Pair<Int, JSONObject>>
+        deviceInfoProvider: () -> JSONObject
     ) {
         currentHost = host
         currentPort = port
         currentCameraId = cameraId
-        deviceInspectorProvider = inspectorProvider
+        this.deviceInfoProvider = deviceInfoProvider
         isRunning.set(true)
 
         client = OkHttpClient.Builder()
@@ -105,7 +126,8 @@ class LaptopWebSocketClient(
                     when (type) {
                         "registration_ack" -> {
                             val camId = json.optString("camera_id")
-                            mainHandler.post { listener.onRegistrationAccepted(camId) }
+                            val devId = json.optString("device_id", null)
+                            mainHandler.post { listener.onRegistrationAccepted(camId, devId) }
                         }
                         "capture_request" -> {
                             val sessionId = json.optString("session_id")
@@ -114,7 +136,7 @@ class LaptopWebSocketClient(
                             mainHandler.post { listener.onCaptureRequest(sessionId, reqId, ts) }
                         }
                         "status_ack" -> {
-                            // Heartbeat confirmed
+                            // Heartbeat confirmed — no action needed
                         }
                         "error" -> {
                             val msg = json.optString("message", "Unknown server error")
@@ -147,31 +169,57 @@ class LaptopWebSocketClient(
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Registration
+    // -------------------------------------------------------------------------
+
     private fun registerDevice() {
         try {
-            val provider = deviceInspectorProvider?.invoke()
-            val deviceModel = provider?.first ?: "Android Phone"
-            val batteryLevel = provider?.second?.first ?: -1
-            val sensorInfo = provider?.second?.second ?: JSONObject()
+            val deviceInfo = deviceInfoProvider?.invoke() ?: JSONObject()
 
             val regObj = JSONObject().apply {
                 put("type", "device_register")
                 put("camera_id", currentCameraId)
-                put("device_name", deviceModel)
-                put("battery_level", batteryLevel)
-                put("sensor_info", sensorInfo)
+
+                // Hardware identity fields
+                val deviceId = deviceInfo.optString("device_id", null)
+                if (!deviceId.isNullOrBlank()) put("device_id", deviceId)
+
+                val manufacturer = deviceInfo.optString("manufacturer", null)
+                if (!manufacturer.isNullOrBlank()) put("manufacturer", manufacturer)
+
+                val model = deviceInfo.optString("model", null)
+                if (!model.isNullOrBlank()) put("model", model)
+
+                val osVersion = deviceInfo.optString("os_version", null)
+                if (!osVersion.isNullOrBlank()) put("os_version", osVersion)
+
+                val mac = deviceInfo.optString("mac_address", null)
+                if (!mac.isNullOrBlank()) put("mac_address", mac)
+
+                // Legacy / informational fields
+                put("device_name", deviceInfo.optString("device_name", "Android Camera"))
+                put("battery_level", deviceInfo.optInt("battery_level", -1))
+                put("sensor_info", deviceInfo.optJSONObject("sensor_info") ?: JSONObject())
             }
+
             webSocket?.send(regObj.toString())
-            Log.i(TAG, "Dispatched registration payload for $currentCameraId")
+            Log.i(TAG, "Sent registration for camera_id='$currentCameraId' " +
+                    "device_id='${regObj.optString("device_id")}' " +
+                    "model='${regObj.optString("manufacturer")} ${regObj.optString("model")}'")
         } catch (e: Exception) {
             Log.e(TAG, "Failed sending registration: ${e.message}")
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Heartbeat
+    // -------------------------------------------------------------------------
+
     fun sendHeartbeat() {
         try {
-            val provider = deviceInspectorProvider?.invoke()
-            val batteryLevel = provider?.second?.first ?: -1
+            val deviceInfo = deviceInfoProvider?.invoke() ?: JSONObject()
+            val batteryLevel = deviceInfo.optInt("battery_level", -1)
 
             val statusObj = JSONObject().apply {
                 put("type", "device_status")
@@ -184,6 +232,10 @@ class LaptopWebSocketClient(
             Log.e(TAG, "Failed sending heartbeat: ${e.message}")
         }
     }
+
+    // -------------------------------------------------------------------------
+    // Capture event notifications
+    // -------------------------------------------------------------------------
 
     fun notifyCaptureStarted(sessionId: String) {
         val obj = JSONObject().apply {

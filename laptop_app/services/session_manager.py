@@ -13,7 +13,15 @@ class SessionManager:
         self.current_session: Optional[CaptureSession] = None
         self._sessions: Dict[str, CaptureSession] = {}
         self._listeners: List[Callable[[], None]] = []
-        self._lock = asyncio.Lock()
+        # Lazy lock: created on first use inside a running event loop.
+        # Creating asyncio.Lock() at module import time (before any loop is
+        # running) raises DeprecationWarning on Python 3.10 and breaks on 3.12+.
+        self._lock: Optional[asyncio.Lock] = None
+
+    def _get_lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
     def add_listener(self, callback: Callable[[], None]):
         self._listeners.append(callback)
@@ -41,7 +49,7 @@ class SessionManager:
         return f"Session_{next_num:03d}"
 
     async def create_session(self, expected_cameras: List[str]) -> CaptureSession:
-        async with self._lock:
+        async with self._get_lock():
             session_id = self.get_next_session_id()
             session = CaptureSession(
                 session_id=session_id,
@@ -75,7 +83,7 @@ class SessionManager:
         timestamp_ms: Optional[int] = None,
         error_msg: Optional[str] = None
     ):
-        async with self._lock:
+        async with self._get_lock():
             session = self._sessions.get(session_id)
             if not session or camera_id not in session.results:
                 return
@@ -100,7 +108,7 @@ class SessionManager:
         metadata: Optional[dict] = None,
         error_msg: Optional[str] = None
     ):
-        async with self._lock:
+        async with self._get_lock():
             session = self._sessions.get(session_id)
             if not session or camera_id not in session.results:
                 return

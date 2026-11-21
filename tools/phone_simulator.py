@@ -148,8 +148,10 @@ class SimulatedAndroidPhone:
                     "timestamp_ms": ts_ms
                 }))
 
-                # Perform reliable upload with exponential backoff
-                self._upload_with_retry(session_id, req_id, jpeg_bytes, sha256)
+                # Perform reliable upload with exponential backoff (run in thread to avoid blocking event loop)
+                asyncio.get_event_loop().run_in_executor(
+                    None, self._upload_with_retry, session_id, req_id, jpeg_bytes, sha256
+                )
 
     def _upload_with_retry(self, session_id: str, req_id: str, jpeg_bytes: bytes, sha256: str, max_retries=3):
         url = f"http://{self.server_host}:{self.server_port}/api/upload"

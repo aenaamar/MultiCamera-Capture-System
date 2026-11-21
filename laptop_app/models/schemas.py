@@ -13,12 +13,22 @@ class CameraState(str, Enum):
     DISCONNECTED = "DISCONNECTED"
 
 class CameraDevice(BaseModel):
+    # Slot name used for file naming and capture dispatch (user-configured, e.g. "camera_01")
     camera_id: str
+    # Hardware-level unique identity — UUID4 generated on the phone, persisted in SharedPreferences.
+    # Survives reconnects; two phones of the same model always have different device_ids.
+    device_id: Optional[str] = None
     device_name: str
+    # Hardware details reported by the phone
+    manufacturer: Optional[str] = None
+    model: Optional[str] = None
+    os_version: Optional[str] = None
+    mac_address: Optional[str] = None      # May be randomised; informational only
     ip_address: str = "0.0.0.0"
     battery_level: Optional[int] = None
     state: CameraState = CameraState.CONNECTED
     sensor_info: Dict[str, Any] = Field(default_factory=dict)
+    registered_at: datetime = Field(default_factory=datetime.utcnow)
     last_heartbeat: datetime = Field(default_factory=datetime.utcnow)
     client_ws: Any = Field(default=None, exclude=True)
 

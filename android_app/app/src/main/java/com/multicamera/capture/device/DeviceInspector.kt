@@ -5,18 +5,100 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Build
+import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.UUID
 
 /**
- * Handles device inspection: model info, battery level, and Camera2 sensor capabilities.
+ * Handles device inspection: unique device identity, model info, battery level,
+ * Wi-Fi MAC (if accessible), and Camera2 sensor capabilities.
+ *
+ * ## Unique Device ID
+ * On first launch, a random UUID4 is generated and stored in SharedPreferences.
+ * This ID survives app restarts and network reconnects.
+ * Two phones of the same brand and model will always have different device IDs.
+ *
+ * The ID is NOT derived from the IMEI, serial number, or any other sensitive
+ * hardware identifier — it is a randomly generated application-level identity.
  */
 class DeviceInspector(private val context: Context) {
 
+    companion object {
+        private const val TAG = "DeviceInspector"
+        private const val PREFS_NAME = "multicamera_device_prefs"
+        private const val KEY_DEVICE_ID = "device_id"
+        private const val KEY_CAMERA_SLOT = "camera_slot"
+    }
+
+    // -------------------------------------------------------------------------
+    // Unique Device ID (UUID4, generated once, stored persistently)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Returns the persistent device UUID for this phone.
+     * Generated once on first run; never changes unless app data is cleared.
+     */
+    val deviceId: String
+        get() = getOrCreateDeviceId()
+
+    private fun getOrCreateDeviceId(): String {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        var id = prefs.getString(KEY_DEVICE_ID, null)
+        if (id.isNullOrBlank()) {
+            id = UUID.randomUUID().toString()
+            prefs.edit().putString(KEY_DEVICE_ID, id).apply()
+            Log.i(TAG, "Generated new device_id: $id")
+        } else {
+            Log.d(TAG, "Loaded existing device_id: $id")
+        }
+        return id
+    }
+
+    // -------------------------------------------------------------------------
+    // Camera slot suggestion (e.g. camera_01)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Returns the user's saved camera slot name (default: "camera_01").
+     * The user can change it in the UI; the new value is persisted on save.
+     */
+    fun getSavedCameraSlot(): String {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getString(KEY_CAMERA_SLOT, "camera_01") ?: "camera_01"
+    }
+
+    fun saveCameraSlot(slot: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_CAMERA_SLOT, slot.trim()).apply()
+    }
+
+    // -------------------------------------------------------------------------
+    // Hardware / OS info
+    // -------------------------------------------------------------------------
+
+    /** Returns the phone model in "Manufacturer Model" format (e.g. "Samsung Galaxy S22"). */
     val deviceModel: String
         get() = "${Build.MANUFACTURER} ${Build.MODEL}"
+
+    val manufacturer: String
+        get() = Build.MANUFACTURER
+
+    val model: String
+        get() = Build.MODEL
+
+    /**
+     * OS version string in human-readable form, e.g. "Android 14 (API 34)".
+     */
+    val osVersion: String
+        get() = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
+
+    // -------------------------------------------------------------------------
+    // Battery
+    // -------------------------------------------------------------------------
 
     val batteryLevel: Int
         get() {
@@ -37,13 +119,69 @@ class DeviceInspector(private val context: Context) {
             }
         }
 
+    // -------------------------------------------------------------------------
+    // Wi-Fi MAC address
+    // -------------------------------------------------------------------------
+
+    /**
+     * Attempts to read the Wi-Fi MAC address.
+     *
+     * Important limitations:
+     * - Android 10+ randomises the MAC per network — the value returned here
+     *   is the *factory* MAC only if the system still exposes it.
+     * - On most Android 10+ devices this returns "02:00:00:00:00:00" or null.
+     * - We collect it as supplementary information only; we never use it as
+     *   a primary identity key because of randomisation.
+     *
+     * Requires ACCESS_WIFI_STATE permission.
+     */
+    val wifiMacAddress: String?
+        get() {
+            return try {
+                @Suppress("DEPRECATION")
+                val wifiManager = context.applicationContext
+                    .getSystemService(Context.WIFI_SERVICE) as WifiManager
+                @Suppress("DEPRECATION")
+                val mac = wifiManager.connectionInfo?.macAddress
+                // Filter out the randomised placeholder value
+                if (mac != null && mac != "02:00:00:00:00:00") mac else null
+            } catch (e: Exception) {
+                Log.d(TAG, "MAC address not available: ${e.message}")
+                null
+            }
+        }
+
+    // -------------------------------------------------------------------------
+    // Complete device info bundle
+    // -------------------------------------------------------------------------
+
+    /**
+     * Returns all device information as a JSONObject suitable for the
+     * registration payload.
+     */
+    fun getDeviceInfoJson(): JSONObject {
+        return JSONObject().apply {
+            put("device_id", deviceId)
+            put("manufacturer", manufacturer)
+            put("model", model)
+            put("device_name", deviceModel)
+            put("os_version", osVersion)
+            put("battery_level", batteryLevel)
+            val mac = wifiMacAddress
+            if (mac != null) put("mac_address", mac)
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Camera2 sensor characteristics
+    // -------------------------------------------------------------------------
+
     fun getCameraCharacteristicsJson(): JSONObject {
         val root = JSONObject()
         try {
             val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
             val cameraIds = cameraManager.cameraIdList
 
-            // Find main rear camera
             var rearCameraId: String? = null
             for (id in cameraIds) {
                 val chars = cameraManager.getCameraCharacteristics(id)
@@ -59,35 +197,29 @@ class DeviceInspector(private val context: Context) {
                 root.put("selected_camera_id", rearCameraId)
                 root.put("lens_facing", "BACK")
 
-                // Focal lengths
                 val focalLengths = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
                 if (focalLengths != null) {
                     val focalArray = JSONArray()
-                    for (f in focalLengths) {
-                        focalArray.put(f.toDouble())
-                    }
+                    for (f in focalLengths) focalArray.put(f.toDouble())
                     root.put("available_focal_lengths", focalArray)
                 }
 
-                // Sensor Physical Size
                 val sensorSize = chars.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
                 if (sensorSize != null) {
-                    val sizeObj = JSONObject()
-                    sizeObj.put("width_mm", sensorSize.width.toDouble())
-                    sizeObj.put("height_mm", sensorSize.height.toDouble())
-                    root.put("sensor_physical_size", sizeObj)
+                    root.put("sensor_physical_size", JSONObject().apply {
+                        put("width_mm", sensorSize.width.toDouble())
+                        put("height_mm", sensorSize.height.toDouble())
+                    })
                 }
 
-                // Sensor Pixel Array Size
                 val pixelArraySize = chars.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
                 if (pixelArraySize != null) {
-                    val pixelObj = JSONObject()
-                    pixelObj.put("width", pixelArraySize.width)
-                    pixelObj.put("height", pixelArraySize.height)
-                    root.put("pixel_array_size", pixelObj)
+                    root.put("pixel_array_size", JSONObject().apply {
+                        put("width", pixelArraySize.width)
+                        put("height", pixelArraySize.height)
+                    })
                 }
 
-                // Hardware level
                 val hwLevel = chars.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
                 root.put("hardware_level", hwLevel ?: -1)
             }

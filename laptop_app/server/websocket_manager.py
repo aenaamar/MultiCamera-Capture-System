@@ -8,7 +8,6 @@ from laptop_app.models.schemas import CameraState
 
 logger = logging.getLogger("WebSocketManager")
 
-logger = logging.getLogger("WebSocketManager")
 
 class WebSocketManager:
     async def handle_connection(self, websocket: WebSocket):
@@ -33,20 +32,37 @@ class WebSocketManager:
                     device_name = msg.get("device_name", "Android Camera")
                     battery_level = msg.get("battery_level")
                     sensor_info = msg.get("sensor_info", {})
-                    
+
+                    # --- Unique device identity fields (new) ---
+                    device_id    = msg.get("device_id")       # UUID4 generated on phone
+                    manufacturer = msg.get("manufacturer")
+                    model        = msg.get("model")
+                    os_version   = msg.get("os_version")
+                    mac_address  = msg.get("mac_address")     # May be randomised; informational
+
                     if not registered_camera_id:
                         await websocket.send_json({"type": "error", "message": "Missing camera_id"})
                         continue
 
-                    # Warn if another active device is already registered under this camera_id.
-                    # DeviceManager.register_device() will close the old WebSocket automatically.
-                    existing = device_manager.get_device(registered_camera_id)
-                    if existing is not None and existing.client_ws is not None and existing.client_ws is not websocket:
+                    if not device_id:
+                        # Older client / client without device_id support — still accepted
                         logger.warning(
-                            f"[WS] camera_id='{registered_camera_id}' already registered "
-                            f"from {existing.ip_address}. New connection from {client_host} "
-                            f"will replace it."
+                            f"[WS] camera_id='{registered_camera_id}' from {client_host} "
+                            f"did not send a device_id. Registration accepted without hardware identity."
                         )
+                    else:
+                        # Warn if a DIFFERENT physical phone is trying to claim the same camera_id slot
+                        existing = device_manager.get_device(registered_camera_id)
+                        if (existing is not None
+                                and existing.device_id is not None
+                                and existing.device_id != device_id
+                                and existing.client_ws is not None
+                                and existing.client_ws is not websocket):
+                            logger.warning(
+                                f"[WS] camera_id='{registered_camera_id}' is currently held by "
+                                f"device_id='{existing.device_id}' ({existing.ip_address}). "
+                                f"New device_id='{device_id}' ({client_host}) is claiming it."
+                            )
 
                     await device_manager.register_device(
                         camera_id=registered_camera_id,
@@ -54,11 +70,17 @@ class WebSocketManager:
                         ip_address=client_host,
                         battery_level=battery_level,
                         sensor_info=sensor_info,
-                        ws=websocket
+                        ws=websocket,
+                        device_id=device_id,
+                        manufacturer=manufacturer,
+                        model=model,
+                        os_version=os_version,
+                        mac_address=mac_address,
                     )
                     await websocket.send_json({
                         "type": "registration_ack",
                         "camera_id": registered_camera_id,
+                        "device_id": device_id,
                         "status": "ACCEPTED"
                     })
 
@@ -113,5 +135,6 @@ class WebSocketManager:
             logger.error(f"WebSocket error: {e}")
             if registered_camera_id:
                 await device_manager.unregister_device(registered_camera_id)
+
 
 ws_manager = WebSocketManager()
